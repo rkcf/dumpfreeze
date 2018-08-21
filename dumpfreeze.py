@@ -1,6 +1,7 @@
 # dumpfreeze
 # Create MySQL dumps and backup to Amazon Glacier
 
+import os
 import logging
 import argparse
 import datetime
@@ -12,7 +13,7 @@ from sys import argv
 logger = logging.getLogger('dumpfreeze')
 
 
-def glacier_upload(backup_file, vault):
+def glacier_upload(backup_path, vault):
     """ Upload db dump to Amazon Glaier
     Args:
         backup_file: Path to backup file
@@ -26,7 +27,7 @@ def glacier_upload(backup_file, vault):
 
     # Open db dump
     try:
-        with open(backup_file, 'rb') as dump:
+        with open(backup_path, 'rb') as dump:
             # Upload dump
             try:
                 response = client.upload_archive(vaultName=vault, body=dump)
@@ -40,29 +41,30 @@ def glacier_upload(backup_file, vault):
                 logger.error(e)
                 raise
     except OSError:
-        logger.error('Failed to open db dump %s for read', backup_file)
+        logger.error('Failed to open db dump %s for read', backup_path)
         raise
 
     return(response)
 
 
-def db_dump(db_name, db_user):
+def db_dump(db_name, db_user, backup_dir):
     """ Generate mysqldump file for db_name
     Args:
         db_name: Name of database to backup
         db_user: Username to connect to mysql with
     Returns:
-        Returns the database backup file name
+        Returns the database backup full path
     """
 
     # Generate ISO 8601 date
     date = datetime.date.isoformat(datetime.datetime.today())
     # Set backup name
     backup_name = db_name + '-backup-' + date + '.sql'
+    backup_path = os.path.join(backup_dir, backup_name)
 
     # Open backup file for write
     try:
-        with open(backup_name, 'w') as backup_file:
+        with open(backup_path, 'w') as backup_file:
             # mysqldump command
             dump_args = ['mysqldump', '--user=' + db_user, db_name]
             # Run mysqldump command in subprocess
@@ -75,11 +77,17 @@ def db_dump(db_name, db_user):
             except subprocess.CalledProcessError as e:
                 logger.error(e.stderr)
                 raise
+    except FileNotFoundError:
+        logger.error('Invalid path for %s', backup_path)
+        raise
+    except PermissionError:
+        logger.error('Invalid permission to write to %s', backup_path)
+        raise
     except OSError:
-        logger.error('Failed to open file %s for write', backup_file)
+        logger.error('Failed to open file %s for write', backup_path)
         raise
 
-    return(backup_name)
+    return(backup_path)
 
 
 def main():
@@ -105,8 +113,10 @@ def main():
                         default=0)
     parser.add_argument('--backup-only',
                         action='store_true',
-                        help='Local backup only',
-                        default=0)
+                        help='Local backup only')
+    parser.add_argument('--backup-dir',
+                        help='Path to backup directory',
+                        default=os.getcwd())
     cmd_args = parser.parse_args()
 
     # Set logger verbosity
@@ -121,11 +131,13 @@ def main():
 
     # Create db dump
     try:
-        backup_file = db_dump(cmd_args.database, cmd_args.user)
+        backup_path = db_dump(cmd_args.database,
+                              cmd_args.user,
+                              cmd_args.backup_dir)
     except Exception as e:
         logger.critical(e)
         raise SystemExit(1)
-    logger.info('Created db dump at %s', backup_file)
+    logger.info('Created db dump at %s', backup_path)
 
     # Exit if local backup only
     if cmd_args.backup_only:
@@ -133,11 +145,11 @@ def main():
 
     # Upload dump to Glacier
     try:
-        glacier_upload(backup_file, cmd_args.vault)
+        glacier_upload(backup_path, cmd_args.vault)
     except Exception as e:
         logger.critical(e)
         raise SystemExit(1)
-    logger.info('Uploaded %s to AWS Glacier', backup_file)
+    logger.info('Uploaded %s to AWS Glacier', backup_path)
 
 
 if __name__ == '__main__':
