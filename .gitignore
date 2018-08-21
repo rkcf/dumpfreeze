@@ -1,3 +1,6 @@
 *.sql
-.venv
+.venv/
 .*.sw?
+build/
+dist/
+dumpfreeze.egg-info/
