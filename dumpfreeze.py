@@ -81,7 +81,7 @@ def db_dump(db_name, db_user):
     return(backup_name)
 
 
-if __name__ == '__main__':
+def main():
     """ Main Program """
     # Setup argument parser
     parser = argparse.ArgumentParser(description='Create MySQl dumps '
@@ -120,13 +120,16 @@ if __name__ == '__main__':
     except Exception as e:
         logger.critical(e)
         raise SystemExit(1)
-    logger.info('Uploaded %s to AWS Glacier', backup_file)
+    logger.info('Created db dump at %s', backup_file)
 
     # Upload dump to Glacier
     try:
-        upload_response = glacier_upload(backup_file, cmd_args.vault)
+        glacier_upload(backup_file, cmd_args.vault)
     except Exception as e:
         logger.critical(e)
         raise SystemExit(1)
+    logger.info('Uploaded %s to AWS Glacier', backup_file)
 
-    logger.info('Created db dump at %s', backup_file)
+
+if __name__ == '__main__':
+    main()
