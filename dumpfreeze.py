@@ -7,6 +7,7 @@ import datetime
 import subprocess
 import boto3
 import botocore
+from sys import argv
 
 logger = logging.getLogger('dumpfreeze')
 
@@ -96,11 +97,15 @@ def main():
                         default='root')
     parser.add_argument('--vault',
                         help='Glacier vault to upload to',
-                        required=True)
+                        required='--backup-only' not in argv)
     parser.add_argument('--verbose',
                         '-v',
                         action='count',
                         help='Verbosity -vvv for full debug',
+                        default=0)
+    parser.add_argument('--backup-only',
+                        action='store_true',
+                        help='Local backup only',
                         default=0)
     cmd_args = parser.parse_args()
 
@@ -121,6 +126,10 @@ def main():
         logger.critical(e)
         raise SystemExit(1)
     logger.info('Created db dump at %s', backup_file)
+
+    # Exit if local backup only
+    if cmd_args.backup_only:
+        return
 
     # Upload dump to Glacier
     try:
