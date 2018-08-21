@@ -39,7 +39,7 @@ def glacier_upload(backup_file, vault):
                 logger.error(e)
                 raise
     except OSError:
-        logger.exception('Failed to open db dump %s for read', backup_file)
+        logger.error('Failed to open db dump %s for read', backup_file)
         raise
 
     return(response)
@@ -72,10 +72,10 @@ def db_dump(db_name, db_user):
                                universal_newlines=True,
                                check=True)
             except subprocess.CalledProcessError as e:
-                logger.exception(e.stderr)
+                logger.error(e.stderr)
                 raise
     except OSError:
-        logger.exception('Failed to open file for write')
+        logger.error('Failed to open file %s for write', backup_file)
         raise
 
     return(backup_name)
@@ -111,11 +111,22 @@ if __name__ == '__main__':
         logging.basicConfig(level=logging.INFO)
     elif cmd_args.verbose == 3:
         logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.CRITICAL)
 
     # Create db dump
-    backup_file = db_dump(cmd_args.database, cmd_args.user)
+    try:
+        backup_file = db_dump(cmd_args.database, cmd_args.user)
+    except Exception as e:
+        logger.critical(e)
+        raise SystemExit(1)
     logger.info('Uploaded %s to AWS Glacier', backup_file)
 
     # Upload dump to Glacier
-    upload_response = glacier_upload(backup_file, cmd_args.vault)
+    try:
+        upload_response = glacier_upload(backup_file, cmd_args.vault)
+    except Exception as e:
+        logger.critical(e)
+        raise SystemExit(1)
+
     logger.info('Created db dump at %s', backup_file)
