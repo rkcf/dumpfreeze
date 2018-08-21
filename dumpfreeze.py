@@ -1,10 +1,14 @@
 # dumpfreeze
 # Create MySQL dumps and backup to Amazon Glacier
 
+import logging
 import argparse
 import datetime
-from subprocess import Popen
+import subprocess
 import boto3
+import botocore
+
+logger = logging.getLogger('dumpfreeze')
 
 
 def glacier_upload(backup_file, vault):
@@ -17,12 +21,26 @@ def glacier_upload(backup_file, vault):
     """
 
     # Create boto aws client
-    aws_client = boto3.client('glacier')
+    client = boto3.client('glacier')
 
     # Open db dump
-    with open(backup_file, 'rb') as dump:
-        # Upload dump
-        response = aws_client.upload_archive(vaultName=vault, body=dump)
+    try:
+        with open(backup_file, 'rb') as dump:
+            # Upload dump
+            try:
+                response = client.upload_archive(vaultName=vault, body=dump)
+            except botocore.exceptions.NoCredentialsError:
+                logger.error('Credentials Not Found')
+                raise
+            except client.exceptions.ResourceNotFoundException:
+                logger.error('Vault not found')
+                raise
+            except botocore.exceptions.ClientError as e:
+                logger.error(e)
+                raise e
+    except OSError as e:
+        logger.exception('Failed to open db dump %s for read', backup_file)
+        raise e
 
     return(response)
 
@@ -42,11 +60,24 @@ def db_dump(db_name, db_user):
     backup_name = db_name + '-backup-' + date + '.sql'
 
     # Open backup file for write
-    with open(backup_name, 'w') as backup_file:
-        # mysqldump command
-        dump_args = ['mysqldump', '--user=' + db_user, db_name]
-        # Run mysqldump command in subprocess
-        Popen(dump_args, stdout=backup_file)
+    try:
+        with open(backup_name, 'w') as backup_file:
+            # mysqldump command
+            dump_args = ['mysqldump', '--user=' + db_user, db_name]
+
+            # Run mysqldump command in subprocess
+            try:
+                subprocess.run(args=dump_args,
+                               stdout=backup_file,
+                               stderr=subprocess.PIPE,
+                               universal_newlines=True,
+                               check=True)
+            except subprocess.CalledProcessError as e:
+                logger.exception(e.stderr)
+                raise SystemExit(1)
+    except OSError:
+        logger.exception('Failed to open file for write')
+        raise SystemExit(1)
 
     return(backup_name)
 
@@ -68,10 +99,27 @@ if __name__ == '__main__':
     parser.add_argument('--vault',
                         help='Glacier vault to upload to',
                         required=True)
+
+    parser.add_argument('--verbose',
+                        '-v',
+                        action='count',
+                        help='Verbosity -vvv for full debug',
+                        default=0)
+
     cmd_args = parser.parse_args()
+
+    # Set logger verbosity
+    if cmd_args.verbose == 1:
+        logging.basicConfig(level=logging.ERROR)
+    elif cmd_args.verbose == 2:
+        logging.basicConfig(level=logging.INFO)
+    elif cmd_args.verbose == 3:
+        logging.basicConfig(level=logging.DEBUG)
 
     # Create db dump
     backup_file = db_dump(cmd_args.database, cmd_args.user)
+    logger.info('Uploaded %s to AWS Glacier', backup_file)
 
     # Upload dump to Glacier
     upload_response = glacier_upload(backup_file, cmd_args.vault)
+    logger.info('Created db dump at %s', backup_file)
