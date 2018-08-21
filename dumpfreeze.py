@@ -37,10 +37,10 @@ def glacier_upload(backup_file, vault):
                 raise
             except botocore.exceptions.ClientError as e:
                 logger.error(e)
-                raise e
-    except OSError as e:
+                raise
+    except OSError:
         logger.exception('Failed to open db dump %s for read', backup_file)
-        raise e
+        raise
 
     return(response)
 
@@ -64,7 +64,6 @@ def db_dump(db_name, db_user):
         with open(backup_name, 'w') as backup_file:
             # mysqldump command
             dump_args = ['mysqldump', '--user=' + db_user, db_name]
-
             # Run mysqldump command in subprocess
             try:
                 subprocess.run(args=dump_args,
@@ -74,10 +73,10 @@ def db_dump(db_name, db_user):
                                check=True)
             except subprocess.CalledProcessError as e:
                 logger.exception(e.stderr)
-                raise SystemExit(1)
+                raise
     except OSError:
         logger.exception('Failed to open file for write')
-        raise SystemExit(1)
+        raise
 
     return(backup_name)
 
@@ -95,17 +94,14 @@ if __name__ == '__main__':
                         '-u',
                         help='User to connect to mysql with',
                         default='root')
-
     parser.add_argument('--vault',
                         help='Glacier vault to upload to',
                         required=True)
-
     parser.add_argument('--verbose',
                         '-v',
                         action='count',
                         help='Verbosity -vvv for full debug',
                         default=0)
-
     cmd_args = parser.parse_args()
 
     # Set logger verbosity
