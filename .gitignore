@@ -4,3 +4,4 @@
 build/
 dist/
 dumpfreeze.egg-info/
+__pycache__/
