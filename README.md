@@ -5,6 +5,18 @@ Create MySQL dumps and backup to Amazon Glacier
 
 Installation
 ------------
+Make sure your AWS credentials are located in ~/.aws/credentials
+
+## Pip
+
+` pip install --user .`
+
+Use:
+
+`dumpfreeze --help`
+
+## Virtualenv
+
 Create virtualenv:
 
 ```
@@ -16,8 +28,6 @@ Install Dependencies:
 
 `pip install -r requirements.txt`
 
-Make sure your AWS credentials are located in ~/.aws/credentials
+Use:
 
-Use
----
-python backup.py --database DATABASE --vault VAULT
+`python -m dumpfreze.main --help`
