@@ -2,13 +2,12 @@
 
 import os
 from setuptools import setup, find_packages
-
-__version__ = '0.2.0'
+import dumpfreeze
 
 setup(
     name='dumpfreeze',
     description='Create MySQL dumps and backup to Amazon Glacier',
-    version=__version__,
+    version=dumpfreeze.__version__,
     url='https://github.com/rkcf/dumpfreeze',
     author_email='rkcf@rkcf.me',
     author='Andrew Steinke',
