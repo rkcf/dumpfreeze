@@ -1,25 +1,24 @@
 # Operations on database backups
 
 import subprocess
-import datetime
 import os
 from logging import getLogger
 
 logger = getLogger(__name__)
 
 
-def create_dump(db_name, db_user, backup_dir):
+def create_dump(db_name, db_user, backup_dir, backup_uuid):
     """ Generate mysqldump file for db_name
     Args:
         db_name: Name of database to backup
         db_user: Username to connect to mysql with
+        backup_dir: Path to backup directory
+        backup_uuid: uuid of backup
     Returns:
         Returns the database backup full path
     """
-    # Generate ISO 8601 date
-    date = datetime.date.isoformat(datetime.datetime.today())
     # Set backup name
-    backup_name = db_name + '-backup-' + date + '.sql'
+    backup_name = backup_uuid + '.sql'
     backup_path = os.path.join(backup_dir, backup_name)
 
     # Open backup file for write

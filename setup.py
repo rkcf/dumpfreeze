@@ -16,7 +16,7 @@ setup(
     data_files=[(os.path.join(os.environ.get('HOME'), '.dumpfreeze'),
                 ['data/inventory.db'])],
     license='MIT',
-    install_requires=['boto3'],
+    install_requires=['boto3', 'click'],
     entry_points={
         'console_scripts': [
             'dumpfreeze = dumpfreeze.main:main'

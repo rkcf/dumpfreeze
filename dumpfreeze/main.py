@@ -4,9 +4,9 @@
 import os
 import logging
 import datetime
-import sys
-import argparse
-from dumpfreeze import backup
+import click
+import uuid
+from dumpfreeze import backup as bak
 from dumpfreeze import aws
 from dumpfreeze.inventorydb import InventoryDb
 from dumpfreeze import __version__
@@ -14,84 +14,195 @@ from dumpfreeze import __version__
 logger = logging.getLogger(__name__)
 
 
-def main():
-    """ Main Program """
-    # Setup argument parser
-    parser = argparse.ArgumentParser(description='Create MySQl dumps '
-                                     'and backup to Amazon Glacier')
-    parser.add_argument('--database',
-                        '-d',
-                        help='Database to backup',
-                        required='--version' not in sys.argv)
-    parser.add_argument('--user',
-                        '-u',
-                        help='User to connect to mysql with',
-                        default='root')
-    parser.add_argument('--vault',
-                        help='Glacier vault to upload to',
-                        required='--backup-only' not in sys.argv and
-                                 '--version' not in sys.argv)
-    parser.add_argument('--verbose',
-                        '-v',
-                        action='count',
-                        help='Verbosity -vvv for full debug',
-                        default=0)
-    parser.add_argument('--backup-only',
-                        action='store_true',
-                        help='Local backup only')
-    parser.add_argument('--backup-dir',
-                        help='Path to backup directory',
-                        default=os.getcwd())
-    parser.add_argument('--version',
-                        help='Print version and exit',
-                        action='store_true')
-    cmd_args = parser.parse_args()
+def abort_if_false(ctx, param, value):
+    if not value:
+        ctx.abort()
 
-    if cmd_args.version:
-        print('dumpfreeze', __version__)
-        return
 
+@click.group()
+@click.option('-v', '--verbose', count=True)
+@click.version_option(__version__, prog_name='dumpfreeze')
+def main(verbose):
+    """ Create MySQL dumps and backup to AWS Glacier """
     # Set logger verbosity
-    if cmd_args.verbose == 1:
+    if verbose == 1:
         logging.basicConfig(level=logging.ERROR)
-    elif cmd_args.verbose == 2:
+    elif verbose == 2:
         logging.basicConfig(level=logging.INFO)
-    elif cmd_args.verbose == 3:
+    elif verbose == 3:
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.CRITICAL)
 
-    # Create db dump
+
+# Backup operations
+@click.group()
+def backup():
+    """ Operations on local backups """
+    pass
+
+
+@backup.command('create')
+@click.option('--user', default='root', help='Database user')
+@click.option('--backup-dir',
+              default=os.getcwd(),
+              help='Backup storage directory')
+@click.argument('database')
+def create_backup(database, user, backup_dir):
+    """ Create a mysqldump backup"""
+    backup_uuid = uuid.uuid4().hex
     try:
-        backup_path = backup.create_dump(cmd_args.database,
-                                         cmd_args.user,
-                                         cmd_args.backup_dir)
+        bak.create_dump(database, user, backup_dir, backup_uuid)
     except Exception as e:
         logger.critical(e)
         raise SystemExit(1)
 
-    # Exit if local backup only
-    if cmd_args.backup_only:
-        return
+    # Insert backup info into backup inventory db
+    backup_info = (backup_uuid,
+                   database,
+                   backup_dir,
+                   datetime.date.isoformat(datetime.datetime.today()))
+    with InventoryDb() as local_db:
+        local_db.insert_backup(backup_info)
 
-    # Upload dump to Glacier
+
+@backup.command('upload')
+@click.option('--vault', required=True, help='Vault to upload to')
+@click.argument('backup_uuid', metavar='UUID')
+def upload_backup(vault, backup_uuid):
+    """ Upload a local backup dump to AWS Glacier """
+    # Get backup info
+    with InventoryDb() as local_db:
+        backup_info = local_db.get_backup(backup_uuid)
+
+    # Construct backup path
+    backup_file = backup_info[0] + '.sql'
+    backup_path = os.path.join(backup_info[2], backup_file)
+
+    # Upload backup_file to Glacier
     try:
-        upload_response = aws.glacier_upload(backup_path,
-                                             cmd_args.vault)
+        upload_response = aws.glacier_upload(backup_path, vault)
     except Exception as e:
         logger.critical(e)
         raise SystemExit(1)
 
-    # Insert archive info into local inventory db
-    archive_info = (upload_response['archiveId'],
-                    cmd_args.vault,
-                    cmd_args.database,
+    # Insert archive info into archive inventory db
+    archive_info = (uuid.uuid4().hex,
+                    upload_response['archiveId'],
                     upload_response['location'],
-                    datetime.date.isoformat(datetime.datetime.today()))
+                    vault,
+                    backup_info[1],
+                    backup_info[3])
+
     with InventoryDb() as local_db:
         local_db.insert_archive(archive_info)
-        local_db.list_inventory()
+
+
+@backup.command('delete')
+@click.argument('backup_uuid', metavar='UUID')
+@click.option('--yes',
+              '-y',
+              is_flag=True,
+              callback=abort_if_false,
+              expose_value=False,
+              prompt='Delete backup?')
+def delete_backup(backup_uuid):
+    """ Delete a local dump backup """
+    # Get backup info
+    with InventoryDb() as local_db:
+        backup_info = local_db.get_backup(backup_uuid)
+
+    # Construct backup path
+    backup_file = backup_info[0] + '.sql'
+    backup_path = os.path.join(backup_info[2], backup_file)
+
+    # Delete file
+    os.remove(backup_path)
+
+    # Remove from db
+    with InventoryDb() as local_db:
+        local_db.remove_backup(backup_uuid)
+
+
+@backup.command('list')
+def list_backup():
+    """ Return a list of all local backups """
+    # Get Inventory
+    with InventoryDb() as local_db:
+        backups = local_db.list_backups()
+
+    # Add header
+    backups.insert(0, ('UUID', 'DATABASE', 'LOCATION', 'DATE'))
+
+    # Calculate widths
+    widths = [max(map(len, column)) for column in zip(*backups)]
+
+    # Print inventory
+    for backup in backups:
+        print("  ".join((val.ljust(width)
+              for val, width in zip(backup, widths))))
+
+
+# Archive operations
+@click.group()
+def archive():
+    """ Operations on AWS Glacier Archives """
+    pass
+
+
+@archive.command('delete')
+@click.argument('archive_uuid', metavar='UUID')
+@click.option('--yes',
+              '-y',
+              is_flag=True,
+              callback=abort_if_false,
+              expose_value=False,
+              prompt='Delete archive?')
+def delete_archive(archive_uuid):
+    """ Delete an archive on AWS Glacier """
+    # Get archive info
+    with InventoryDb() as local_db:
+        archive_info = local_db.get_archive(archive_uuid)
+
+    # Send delete job to AWS
+    aws.delete_archive(archive_info)
+
+    # Remove from db
+    with InventoryDb() as local_db:
+        local_db.remove_archive(archive_uuid)
+
+
+@archive.command('retrieve')
+def retrieve_archive():
+    """ Not Implemented: Initiate an archive retrieval from AWS Glacier """
+    pass
+
+
+@archive.command('list')
+def list_archive():
+    """ Return a list of uploaded archives """
+    # Get inventory
+    with InventoryDb() as local_db:
+        archives = local_db.list_archives()
+
+    # Strip info
+    stripped = []
+    for archive in archives:
+        stripped.append((archive[0], archive[3], archive[4], archive[5]))
+
+    # Add header
+    stripped.insert(0, ('UUID', 'VAULT', 'DATABASE', 'DATE'))
+
+    # Calculate widths
+    widths = [max(map(len, column)) for column in zip(*stripped)]
+
+    # Print inventory
+    for archive in stripped:
+        print("  ".join((val.ljust(width)
+              for val, width in zip(archive, widths))))
 
 
 if __name__ == '__main__':
+    main.add_command(backup)
+    main.add_command(archive)
     main()
