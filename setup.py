@@ -19,7 +19,7 @@ setup(
     install_requires=['boto3', 'click'],
     entry_points={
         'console_scripts': [
-            'dumpfreeze = dumpfreeze.main:main'
+            'dumpfreeze = dumpfreeze.main'
         ]
     },
     )

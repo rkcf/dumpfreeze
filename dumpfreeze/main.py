@@ -65,6 +65,8 @@ def create_backup(database, user, backup_dir):
     with InventoryDb() as local_db:
         local_db.insert_backup(backup_info)
 
+    click.echo(backup_info[0])
+
 
 @backup.command('upload')
 @click.option('--vault', required=True, help='Vault to upload to')
@@ -97,6 +99,8 @@ def upload_backup(vault, backup_uuid):
     with InventoryDb() as local_db:
         local_db.insert_archive(archive_info)
 
+    click.echo(archive_info[0])
+
 
 @backup.command('delete')
 @click.argument('backup_uuid', metavar='UUID')
@@ -122,6 +126,8 @@ def delete_backup(backup_uuid):
     # Remove from db
     with InventoryDb() as local_db:
         local_db.remove_backup(backup_uuid)
+
+    click.echo(backup_info[0])
 
 
 @backup.command('list')
@@ -171,6 +177,8 @@ def delete_archive(archive_uuid):
     with InventoryDb() as local_db:
         local_db.remove_archive(archive_uuid)
 
+    click.echo(archive_uuid)
+
 
 @archive.command('retrieve')
 def retrieve_archive():
@@ -202,7 +210,6 @@ def list_archive():
               for val, width in zip(archive, widths))))
 
 
-if __name__ == '__main__':
-    main.add_command(backup)
-    main.add_command(archive)
-    main()
+main.add_command(backup)
+main.add_command(archive)
+main()
