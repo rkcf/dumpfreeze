@@ -23,7 +23,7 @@ def abort_if_false(ctx, param, value):
 @click.option('-v', '--verbose', count=True)
 @click.version_option(__version__, prog_name='dumpfreeze')
 def main(verbose):
-    """ Create MySQL dumps and backup to AWS Glacier """
+    """ Create and manage MySQL dumps locally and on AWS Glacier """
     # Set logger verbosity
     if verbose == 1:
         logging.basicConfig(level=logging.ERROR)
