@@ -36,7 +36,7 @@ Create a backup:
 
 Upload a backup to AWS Glacier:
 
-`dumpfreeze backup upload UUID`
+`dumpfreeze backup upload --vault VAULTNAME UUID`
 
 Delete a backup:
 
@@ -55,6 +55,12 @@ Delete an archive:
 List archives in local inventory:
 
 `dumpfreeze archive list`
+
+Initiate a retrieval job for an archive:
+
+`dumpfreeze archive retrieve UUID`
+
+This command will initiate an AWS Glacier retrieval job.  Due to the nature of Glacier, archives are not immediately available.  A secondary command, `dumpfreeze poll-jobs` will check all active jobs for completion, and if complete will grab the actual archive and store it as a local backup.  A retrieval job typically takes 3-5 hours, and will expire sometime after 24 hours of completion.  Because of this, the poll-jobs command should be run periodically as a cron job.
 
 Contributing
 ------------
