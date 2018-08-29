@@ -42,39 +42,85 @@ def glacier_upload(backup_path, vault):
 
 
 def retrieve_archive(archive_info):
-    """ Not Implemented: Initates an archive retrieval job
+    """ Initates an archive retrieval job
     Args:
-        archive_info: archive info
+        archive_info: inventorydb.Archive object
+    Returns:
+        Returns job metadata
     """
-    # Pull archive info
-    # account_id = archive_info[2].split('/')[1]
-    # vault_name = archive_info[3]
-    # archive_id = archive_info[1]
-
     # Create boto archive object
-    # glacier = boto3.resource('glacier')
-    # archive = glacier.Archive(account_id, vault_name, archive_id)
+    glacier = boto3.resource('glacier')
+    archive = glacier.Archive(archive_info.location.split('/')[1],
+                              archive_info.vault_name,
+                              archive_info.aws_id)
 
     # Send request to initiate retrieval job
-    # response = archive.initiate_archive_retrieval()
-    # Store Job Info
+    response = archive.initiate_archive_retrieval()
 
-    # logger.info('initated archive retrieval of %s', archive)
+    logger.info('initated archive retrieval of %s', archive)
+
+    return((response.account_id, response.vault_name, response.id))
 
 
 def delete_archive(archive_info):
     """ Delete an archive
     Args:
-        archive_info: archive info
+        archive_info: inventorydb.Archive object
     """
-    # Pull archive info
-    account_id = archive_info[2].split('/')[1]
-    vault_name = archive_info[3]
-    archive_id = archive_info[1]
-
     # Create boto archive object
     glacier = boto3.resource('glacier')
-    archive = glacier.Archive(account_id, vault_name, archive_id)
-
+    archive = glacier.Archive(archive_info.location.split('/')[1],
+                              archive_info.vault_name,
+                              archive_info.aws_id)
     archive.delete()
-    logger.info('Deleted Archive %s', archive_info[0])
+    logger.info('Deleted Archive %s', archive_info.id)
+
+
+def check_job(job_info):
+    """ Check if job is complete
+    Args:
+        job_info: inventorydb.Job object
+    Returns:
+        Returns True if job is complete
+    """
+    # Create boto job object
+    glacier = boto3.resource('glacier')
+    job = glacier.Job(job_info.account_id, job_info.vault_name, job_info.id)
+
+    # Reload job info
+    job.load()
+
+    return job.completed
+
+
+def get_archive_data(job_info):
+    """ Retrieves archive data
+    Args:
+        job_info: inventorydb.Job object
+    Returns:
+        Returns the archive body
+    """
+    # Create boto job object
+    glacier = boto3.resource('glacier')
+    job = glacier.Job(job_info.account_id, job_info.vault_name, job_info.id)
+
+    # Get output
+    output = job.get_output()
+
+    # Convert output from StreamingBody
+    body = output['body'].read().decode('utf-8')
+
+    return body
+
+
+def get_job_archive(job_info):
+    """ Get corrosponding AWS archive id of job
+    Args:
+        job_info: inventorydb.Job object
+    Returns:
+        Returns the AWS archive id
+    """
+    glacier = boto3.resource('glacier')
+    job = glacier.Job(job_info.account_id, job_info.vault_name, job_info.id)
+
+    return job.archive_iD

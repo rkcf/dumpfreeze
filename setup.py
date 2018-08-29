@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-import os
 from setuptools import setup, find_packages
 import dumpfreeze
 
@@ -13,10 +12,8 @@ setup(
     author='Andrew Steinke',
     long_description=open('README.md').read(),
     packages=find_packages(),
-    data_files=[(os.path.join(os.environ.get('HOME'), '.dumpfreeze'),
-                ['data/inventory.db'])],
     license='MIT',
-    install_requires=['boto3', 'click'],
+    install_requires=['boto3', 'click', 'SQLAlchemy'],
     entry_points={
         'console_scripts': [
             'dumpfreeze = dumpfreeze.main'

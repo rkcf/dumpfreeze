@@ -6,9 +6,10 @@ import logging
 import datetime
 import click
 import uuid
+import sqlalchemy as sa
 from dumpfreeze import backup as bak
 from dumpfreeze import aws
-from dumpfreeze.inventorydb import InventoryDb
+from dumpfreeze import inventorydb
 from dumpfreeze import __version__
 
 logger = logging.getLogger(__name__)
@@ -21,8 +22,10 @@ def abort_if_false(ctx, param, value):
 
 @click.group()
 @click.option('-v', '--verbose', count=True)
+@click.option('--local-db', default='~/.dumpfreeze/inventory.db')
 @click.version_option(__version__, prog_name='dumpfreeze')
-def main(verbose):
+@click.pass_context
+def main(ctx, verbose, local_db):
     """ Create and manage MySQL dumps locally and on AWS Glacier """
     # Set logger verbosity
     if verbose == 1:
@@ -34,10 +37,22 @@ def main(verbose):
     else:
         logging.basicConfig(level=logging.CRITICAL)
 
+    # Check if db exists, if not create it
+    expanded_db_path = os.path.expanduser(local_db)
+    if not os.path.isfile(expanded_db_path):
+        inventorydb.setup_db(expanded_db_path)
+
+    # Create db session
+    db_engine = sa.create_engine('sqlite:///' + expanded_db_path)
+    Session = sa.orm.sessionmaker(bind=db_engine)
+    ctx.obj['session_maker'] = Session
+    return
+
 
 # Backup operations
 @click.group()
-def backup():
+@click.pass_context
+def backup(ctx):
     """ Operations on local backups """
     pass
 
@@ -48,7 +63,8 @@ def backup():
               default=os.getcwd(),
               help='Backup storage directory')
 @click.argument('database')
-def create_backup(database, user, backup_dir):
+@click.pass_context
+def create_backup(ctx, database, user, backup_dir):
     """ Create a mysqldump backup"""
     backup_uuid = uuid.uuid4().hex
     try:
@@ -57,29 +73,40 @@ def create_backup(database, user, backup_dir):
         logger.critical(e)
         raise SystemExit(1)
 
-    # Insert backup info into backup inventory db
-    backup_info = (backup_uuid,
-                   database,
-                   backup_dir,
-                   datetime.date.isoformat(datetime.datetime.today()))
-    with InventoryDb() as local_db:
-        local_db.insert_backup(backup_info)
+    today = datetime.date.isoformat(datetime.datetime.today())
 
-    click.echo(backup_info[0])
+    # Insert backup info into backup inventory db
+    backup_info = inventorydb.Backup(id=backup_uuid,
+                                     database_name=database,
+                                     backup_dir=backup_dir,
+                                     date=today)
+    local_db = ctx.obj['session_maker']()
+    backup_info.store(local_db)
+
+    click.echo(backup_uuid)
 
 
 @backup.command('upload')
 @click.option('--vault', required=True, help='Vault to upload to')
 @click.argument('backup_uuid', metavar='UUID')
-def upload_backup(vault, backup_uuid):
+@click.pass_context
+def upload_backup(ctx, vault, backup_uuid):
     """ Upload a local backup dump to AWS Glacier """
     # Get backup info
-    with InventoryDb() as local_db:
-        backup_info = local_db.get_backup(backup_uuid)
+    local_db = ctx.obj['session_maker']()
+    try:
+        query = local_db.query(inventorydb.Backup)
+        backup_info = query.filter_by(id=backup_uuid).one()
+    except Exception as e:
+        logger.critical(e)
+        local_db.rollback()
+        raise SystemExit(1)
+    finally:
+        local_db.close()
 
     # Construct backup path
-    backup_file = backup_info[0] + '.sql'
-    backup_path = os.path.join(backup_info[2], backup_file)
+    backup_file = backup_info.id + '.sql'
+    backup_path = os.path.join(backup_info.backup_dir, backup_file)
 
     # Upload backup_file to Glacier
     try:
@@ -88,18 +115,18 @@ def upload_backup(vault, backup_uuid):
         logger.critical(e)
         raise SystemExit(1)
 
+    archive_uuid = uuid.uuid4().hex
     # Insert archive info into archive inventory db
-    archive_info = (uuid.uuid4().hex,
-                    upload_response['archiveId'],
-                    upload_response['location'],
-                    vault,
-                    backup_info[1],
-                    backup_info[3])
+    archive_info = inventorydb.Archive(id=archive_uuid,
+                                       aws_id=upload_response['archiveId'],
+                                       location=upload_response['location'],
+                                       vault_name=vault,
+                                       database_name=backup_info.database_name,
+                                       date=backup_info.date)
+    local_db = ctx.obj['session_maker']()
+    archive_info.store(local_db)
 
-    with InventoryDb() as local_db:
-        local_db.insert_archive(archive_info)
-
-    click.echo(archive_info[0])
+    click.echo(archive_uuid)
 
 
 @backup.command('delete')
@@ -110,48 +137,74 @@ def upload_backup(vault, backup_uuid):
               callback=abort_if_false,
               expose_value=False,
               prompt='Delete backup?')
-def delete_backup(backup_uuid):
+@click.pass_context
+def delete_backup(ctx, backup_uuid):
     """ Delete a local dump backup """
     # Get backup info
-    with InventoryDb() as local_db:
-        backup_info = local_db.get_backup(backup_uuid)
+    local_db = ctx.obj['session_maker']()
+    try:
+        query = local_db.query(inventorydb.Backup)
+        backup_info = query.filter_by(id=backup_uuid).one()
+    except Exception as e:
+        logger.critical(e)
+        local_db.rollback()
+        raise SystemExit(1)
+    finally:
+        local_db.close()
 
     # Construct backup path
-    backup_file = backup_info[0] + '.sql'
-    backup_path = os.path.join(backup_info[2], backup_file)
+    backup_file = backup_info.id + '.sql'
+    backup_path = os.path.join(backup_info.backup_dir, backup_file)
 
     # Delete file
     os.remove(backup_path)
 
     # Remove from db
-    with InventoryDb() as local_db:
-        local_db.remove_backup(backup_uuid)
+    local_db = ctx.obj['session_maker']()
+    backup_info.delete(local_db)
 
-    click.echo(backup_info[0])
+    click.echo(backup_info.id)
 
 
 @backup.command('list')
-def list_backup():
+@click.pass_context
+def list_backup(ctx):
     """ Return a list of all local backups """
     # Get Inventory
-    with InventoryDb() as local_db:
-        backups = local_db.list_backups()
+    local_db = ctx.obj['session_maker']()
+    try:
+        backups = local_db.query(inventorydb.Backup).all()
+    except Exception as e:
+        logger.critical(e)
+        local_db.rollback()
+        raise SystemExit(1)
+    finally:
+        local_db.close()
+
+    # do some formatting for printing
+    formatted = []
+    for backup in backups:
+        formatted.append([backup.id,
+                          backup.database_name,
+                          backup.backup_dir,
+                          backup.date])
 
     # Add header
-    backups.insert(0, ('UUID', 'DATABASE', 'LOCATION', 'DATE'))
+    formatted.insert(0, ['UUID', 'DATABASE', 'LOCATION', 'DATE'])
 
     # Calculate widths
-    widths = [max(map(len, column)) for column in zip(*backups)]
+    widths = [max(map(len, column)) for column in zip(*formatted)]
 
     # Print inventory
-    for backup in backups:
+    for row in formatted:
         print("  ".join((val.ljust(width)
-              for val, width in zip(backup, widths))))
+              for val, width in zip(row, widths))))
 
 
 # Archive operations
 @click.group()
-def archive():
+@click.pass_context
+def archive(ctx):
     """ Operations on AWS Glacier Archives """
     pass
 
@@ -164,52 +217,161 @@ def archive():
               callback=abort_if_false,
               expose_value=False,
               prompt='Delete archive?')
-def delete_archive(archive_uuid):
+@click.pass_context
+def delete_archive(ctx, archive_uuid):
     """ Delete an archive on AWS Glacier """
     # Get archive info
-    with InventoryDb() as local_db:
-        archive_info = local_db.get_archive(archive_uuid)
+    local_db = ctx.obj['session_maker']()
+    try:
+        query = local_db.query(inventorydb.Archive)
+        archive_info = query.filter_by(id=archive_uuid).one()
+    except Exception as e:
+        logger.critical(e)
+        local_db.rollback()
+        raise SystemExit(1)
+    finally:
+        local_db.close()
 
     # Send delete job to AWS
     aws.delete_archive(archive_info)
 
     # Remove from db
-    with InventoryDb() as local_db:
-        local_db.remove_archive(archive_uuid)
+    local_db = ctx.obj['session_maker']()
+    archive_info.delete(local_db)
 
     click.echo(archive_uuid)
 
 
 @archive.command('retrieve')
-def retrieve_archive():
-    """ Not Implemented: Initiate an archive retrieval from AWS Glacier """
-    pass
+@click.argument('archive_uuid', metavar='UUID')
+@click.pass_context
+def retrieve_archive(ctx, archive_uuid):
+    """ Initiate an archive retrieval from AWS Glacier """
+    # Get archive info
+    local_db = ctx.obj['session_maker']()
+    try:
+        query = local_db.query(inventorydb.Archive)
+        archive_info = query.filter_by(id=archive_uuid).one()
+    except Exception as e:
+        logger.critical(e)
+        local_db.rollback()
+        raise SystemExit(1)
+    finally:
+        local_db.close()
+
+    # Initiate archive retrieval job
+    job_response = aws.retrieve_archive(archive_info)
+
+    # Insert backup info into backup inventory db
+    job_info = inventorydb.Job(account_id=job_response[0],
+                               vault_name=job_response[1],
+                               id=job_response[2])
+
+    local_db = ctx.obj['session_maker']()
+    job_info.store(local_db)
 
 
 @archive.command('list')
-def list_archive():
+@click.pass_context
+def list_archive(ctx):
     """ Return a list of uploaded archives """
     # Get inventory
-    with InventoryDb() as local_db:
-        archives = local_db.list_archives()
+    local_db = ctx.obj['session_maker']()
+    try:
+        archives = local_db.query(inventorydb.Archive).all()
+    except Exception as e:
+        logger.critical(e)
+        local_db.rollback()
+        raise SystemExit(1)
+    finally:
+        local_db.close()
 
-    # Strip info
-    stripped = []
+    # do some formatting for printing
+    formatted = []
     for archive in archives:
-        stripped.append((archive[0], archive[3], archive[4], archive[5]))
+        formatted.append([archive.id,
+                          archive.vault_name,
+                          archive.database_name,
+                          archive.date])
 
     # Add header
-    stripped.insert(0, ('UUID', 'VAULT', 'DATABASE', 'DATE'))
+    formatted.insert(0, ('UUID', 'VAULT', 'DATABASE', 'DATE'))
 
     # Calculate widths
-    widths = [max(map(len, column)) for column in zip(*stripped)]
+    widths = [max(map(len, column)) for column in zip(*formatted)]
 
     # Print inventory
-    for archive in stripped:
+    for row in formatted:
         print("  ".join((val.ljust(width)
-              for val, width in zip(archive, widths))))
+              for val, width in zip(row, widths))))
+
+
+@click.command('poll-jobs')
+@click.pass_context
+def poll_jobs(ctx):
+    """ Check each job in job list, check for completion,
+    and download job data
+    """
+    # Get job list
+    local_db = ctx.obj['session_maker']()
+    try:
+        job_list = local_db.query(inventorydb.Job).all()
+    except Exception as e:
+        logger.critical(e)
+        local_db.rollback()
+        raise SystemExit(1)
+    finally:
+        local_db.close()
+
+    # Check for job completion
+    for job in job_list:
+        logger.info('Checking job %s for completion', job.id)
+        if aws.check_job(job):
+            logger.info('Job %s complete, getting data', job.id)
+            # Pull archive data
+            backup_data = aws.get_archive_data(job)
+
+            # Store backup data as new file
+            backup_dir = os.getcwd()
+            backup_uuid = uuid.uuid4().hex
+            backup_file = backup_uuid + '.sql'
+            backup_path = os.path.join(backup_dir, backup_file)
+
+            with open(backup_path, 'w') as f:
+                f.write(backup_data)
+
+            # Get corrosponding archive data
+            archive_id = aws.get_job_archive(job)
+            local_db = ctx.obj['session_maker']()
+            try:
+                query = local_db.query(inventorydb.Archive)
+                archive_info = query.filter_by(aws_id=archive_id).one()
+            except Exception as e:
+                logger.critical(e)
+                local_db.rollback()
+                raise SystemExit(1)
+            finally:
+                local_db.close()
+
+            database_name = archive_info.database_name
+            backup_date = archive_info.date
+
+            # Insert backup info into backup inventory db
+            backup_info = inventorydb.Backup(id=backup_uuid,
+                                             database_name=database_name,
+                                             backup_dir=backup_dir,
+                                             date=backup_date)
+            local_db = ctx.obj['session_maker']()
+            backup_info.store(local_db)
+
+            # Delete job from db
+            local_db = ctx.obj['session_maker']()
+            job.delete(local_db)
+
+        click.echo(backup_uuid)
 
 
 main.add_command(backup)
 main.add_command(archive)
-main()
+main.add_command(poll_jobs, name='poll-jobs')
+main(obj={})

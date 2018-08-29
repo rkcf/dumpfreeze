@@ -1,174 +1,135 @@
 # Operations on local database for storage of archive inventory and job list
-import sqlite3
-import os
+import sqlalchemy as sa
+import sqlalchemy.ext.declarative
 from logging import getLogger
 
 logger = getLogger(__name__)
 
+base = sqlalchemy.ext.declarative.declarative_base()
 
-class InventoryDb:
-    """ Local Inventory DB class """
 
-    def __init__(self):
-        # Check if inventory.db exists, if not create a new one
-        data_dir = os.path.join(os.environ.get('HOME'), '.dumpfreeze')
-        self.dbfile = os.path.join(data_dir, 'inventory.db')
+class Archive(base):
+    """ AWS Glacier archive object """
+    __tablename__ = 'archive'
+    id = sa.Column(sa.String, primary_key=True)
+    aws_id = sa.Column(sa.String)
+    location = sa.Column(sa.String)
+    vault_name = sa.Column(sa.String)
+    database_name = sa.Column(sa.String)
+    date = sa.Column(sa.String)
 
-        if os.path.isfile(self.dbfile):
-            self.conn = sqlite3.connect(self.dbfile)
-        else:
-            self.conn = sqlite3.connect(self.dbfile)
-            self.setup_db()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.conn.close()
-
-    def setup_db(self):
-        """ Create a new database """
-        c = self.conn.cursor()
-
-        c.execute('''CREATE TABLE backup (uuid text,
-                                          database_name text,
-                                          backup_dir text,
-                                          date text
-                                          )''')
-        c.execute('''CREATE TABLE archive (uuid text,
-                                           archive_id text,
-                                           location text,
-                                           vault_name text,
-                                           database_name text,
-                                           date text
-                                           )''')
-        c.execute('''CREATE TABLE job (account_id text,
-                                       vault_name text,
-                                       job_id text
-                                       )''')
-
-        self.conn.commit()
-        logger.info('Created new local database')
-        c.close()
-
-    def insert_archive(self, archive):
-        """ Insert archive into database
+    def store(self, session):
+        """ store object in db
         Args:
-            archive: archive metadata
+            session: sqlalchemy session
         """
-        c = self.conn.cursor()
+        try:
+            session.add(self)
+            session.commit()
+        except Exception as e:
+            logger.critical(e)
+            session.rollback()
+            raise SystemExit(1)
+        finally:
+            session.close()
 
-        c.execute('INSERT INTO archive VALUES (?,?,?,?,?,?)', archive)
-
-        self.conn.commit()
-        logger.info('Inserted archive of %s into local inventory', archive[2])
-        c.close()
-
-    def get_archive(self, archive_uuid):
-        """ Return backup info
+    def delete(self, session):
+        """ delete object from db
         Args:
-            backup_uuid: UUID of backup
+            session: sqlalchemy session
         """
-        c = self.conn.cursor()
+        try:
+            session.delete(self)
+            session.commit()
+        except Exception as e:
+            logger.critical(e)
+            session.rollback()
+            raise SystemExit(1)
+        finally:
+            session.close()
 
-        uuid = (archive_uuid, )
-        c.execute('SELECT * from archive WHERE uuid=?', uuid)
-        archive_info = c.fetchone()
 
-        c.close()
-        logger.info('Fetched archive info for %s from inventory', archive_uuid)
-        return archive_info
+class Backup(base):
+    """ Local backup object """
+    __tablename__ = 'backup'
+    id = sa.Column(sa.String, primary_key=True)
+    database_name = sa.Column(sa.String)
+    backup_dir = sa.Column(sa.String)
+    date = sa.Column(sa.String)
 
-    def remove_archive(self, archive_uuid):
-        """ Remove archive info
+    def store(self, session):
+        """ store object in db
         Args:
-            archive_uuid: UUID of archive
+            session: sqlalchemy session
         """
-        c = self.conn.cursor()
+        try:
+            session.add(self)
+            session.commit()
+        except Exception as e:
+            logger.critical(e)
+            session.rollback()
+            raise SystemExit(1)
+        finally:
+            session.close()
 
-        uuid = (archive_uuid, )
-        c.execute('DELETE from archive WHERE uuid=?', uuid)
-
-        self.conn.commit()
-        logger.info('Removed archive %s info from inventory', archive_uuid)
-        c.close()
-
-    def list_archives(self):
-        """ Return a list of archive info """
-        c = self.conn.cursor()
-
-        c.execute('SELECT * from archive')
-        archives = c.fetchall()
-
-        c.close
-        logger.info('Fetched list of archives from inventory')
-        return archives
-
-    def insert_backup(self, backup):
-        """ Insert local backup info into database
+    def delete(self, session):
+        """ delete object from db
         Args:
-            backup: backup metadata
+            session: sqlalchemy session
         """
-        c = self.conn.cursor()
+        try:
+            session.delete(self)
+            session.commit()
+        except Exception as e:
+            logger.critical(e)
+            session.rollback()
+            raise SystemExit(1)
+        finally:
+            session.close()
 
-        c.execute('INSERT INTO backup VALUES (?,?,?,?)', backup)
 
-        self.conn.commit()
-        logger.info('Inserted backup of %s into local inventory', backup[1])
-        c.close()
+class Job(base):
+    """ AWS Glacier job object """
+    __tablename__ = 'job'
+    account_id = sa.Column(sa.String)
+    vault_name = sa.Column(sa.String)
+    id = sa.Column(sa.String, primary_key=True)
 
-    def get_backup(self, backup_uuid):
-        """ Return backup info
+    def store(self, session):
+        """ store object in db
         Args:
-            backup_uuid: UUID of backup
+            session: sqlalchemy session
         """
-        c = self.conn.cursor()
+        try:
+            session.add(self)
+            session.commit()
+        except Exception as e:
+            logger.critical(e)
+            session.rollback()
+            raise SystemExit(1)
+        finally:
+            session.close()
 
-        uuid = (backup_uuid, )
-        c.execute('SELECT * from backup WHERE uuid=?', uuid)
-        backup_info = c.fetchone()
-
-        c.close()
-        logger.info('Fetched backup info for %s from inventory', backup_uuid)
-        return backup_info
-
-    def remove_backup(self, backup_uuid):
-        """ Remove backup info
+    def delete(self, session):
+        """ delete object from db
         Args:
-            backup_uuid: UUID of backup
+            session: sqlalchemy session
         """
-        c = self.conn.cursor()
+        try:
+            session.delete(self)
+            session.commit()
+        except Exception as e:
+            logger.critical(e)
+            session.rollback()
+            raise SystemExit(1)
+        finally:
+            session.close()
 
-        uuid = (backup_uuid, )
-        c.execute('DELETE from backup WHERE uuid=?', uuid)
 
-        self.conn.commit()
-        c.close()
-        logger.info('Removed backup %s from inventory', backup_uuid)
-
-    def list_backups(self):
-        """ Return list of local backups """
-        c = self.conn.cursor()
-
-        c.execute('SELECT * from backup')
-        backups = c.fetchall()
-
-        c.close()
-        logger.info('Fetched list of backups from inventory')
-        return backups
-
-    def insert_job(self, job):
-        """ Insert AWS Glacier job info into database """
-        c = self.conn.cursor()
-
-        account_id = job.vault_arn.split(':')[4]
-        vault_name = job.vault_arn.split(':')[5].split('/')[1]
-
-        c.execute("Insert INTO job VALUES (?,?,?)",
-                  account_id,
-                  vault_name,
-                  job.job_id)
-
-        self.conn.commit()
-        logger.info('Inserted job into local job list')
-        c.close()
+def setup_db(local_db):
+    """ Initialize database
+    Args:
+        local_db: path to local database file
+    """
+    engine = sa.create_engine('sqlite:///' + local_db)
+    base.metadata.create_all(engine)
