@@ -129,6 +129,31 @@ def upload_backup(ctx, vault, backup_uuid):
     click.echo(archive_uuid)
 
 
+@backup.command('restore')
+@click.option('--user', default='root', help='Database user')
+@click.argument('backup_uuid', metavar='UUID')
+@click.pass_context
+def restore_backup(ctx, user, backup_uuid):
+    """ Restore a backup to the database """
+    # Get backup info
+    local_db = ctx.obj['session_maker']()
+    try:
+        query = local_db.query(inventorydb.Backup)
+        backup_info = query.filter_by(id=backup_uuid).one()
+    except Exception as e:
+        logger.critical(e)
+        local_db.rollback()
+        raise SystemExit(1)
+    finally:
+        local_db.close()
+
+    # Restore backup to database
+    bak.restore_dump(backup_info.database_name,
+                     user,
+                     backup_info.backup_dir,
+                     backup_info.id)
+
+
 @backup.command('delete')
 @click.argument('backup_uuid', metavar='UUID')
 @click.option('--yes',
